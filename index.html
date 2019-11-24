@@ -343,86 +343,6 @@
 				newPathname += "/lvgl.html" /*+ '?' + "env=dev"*/;
 				return newPathname;
 			}
-			function combineScripts(url1, url2){
-				var script_passed_handler = function() {
-					console.log("Script passed: " + script_passed);
-					runScript();
-					script_passed = false;
-				};
-				var prev_external_link = external_link;
-				var request = null;
-
-				var error_handler = function() {
-					if(prev_external_link != null) {
-						external_link = prev_external_link;
-					}
-					if(request != null)
-						alert("Failed to load script due to error " + request.status + ": " + request.statusText + "\nThe contents of the external link box have been reverted.");
-					else
-						alert("The URL you passed is invalid.");
-				};
-
-				try {
-					new URL(url1);
-					new URL(url2);
-				} catch(e) {
-					error_handler();
-					return;
-				}
-				loaded_scripts = {init:null, main:null};
-				var try_combine = function(){
-					if(loaded_scripts.init !== null && loaded_scripts.main !== null){
-						var full_script = "###### init script ######\n\n"+loaded_scripts.init+"\n\n###### main script ######\n\n"+loaded_scripts.main;
-						editor.session.getUndoManager().reset();
-						editor.session.setValue(full_script, -1);
-						script_passed_handler();
-
-					}
-				}
-				external_link = url2;
-				// read text from URL location
-				request = new XMLHttpRequest();
-				console.log("GET " + url1);
-				request.overrideMimeType("text/plain");
-				request.open('GET', url1, true);
-				request.send(null);
-				request.onerror = error_handler;
-				request.onreadystatechange = function(){
-					if (request.readyState === 4) {
-						if(request.status == 200) {
-							console.log(request.reponseText);
-							if(request.responseText === undefined)
-								return;
-							loaded_scripts.init = request.responseText;
-							try_combine();
-						} else {
-							error_handler();
-						}
-					}
-
-				};
-				// read text from URL location
-				request2 = new XMLHttpRequest();
-				console.log("GET " + url2);
-				request2.overrideMimeType("text/plain");
-				request2.open('GET', url2, true);
-				request2.send(null);
-				request2.onerror = error_handler;
-				request2.onreadystatechange = function(){
-					if (request2.readyState === 4) {
-						if(request2.status == 200) {
-							console.log(request2.reponseText);
-							if(request2.responseText === undefined)
-								return;
-							loaded_scripts.main = request2.responseText;
-							try_combine();
-						} else {
-							error_handler();
-						}
-					}
-
-				};
-			}
 			function processScriptArg(url, lzstring){
 				var script_passed_handler = function() {
 					console.log("Script passed: " + script_passed);
@@ -430,6 +350,10 @@
 					script_passed = false;
 				};
 				if(!lzstring) {
+					// if url is a single url we convert it to array
+					if(!Array.isArray(url)){
+						url = [{"url": url}];
+					}
 					var prev_external_link = external_link;
 					var request = null;
 
@@ -444,34 +368,52 @@
 					};
 
 					try {
-						new URL(url);
+						url.forEach(e=>{
+							new URL(e.url);
+						});
 					} catch(e) {
 						error_handler();
 						return;
 					}
 
-					external_link = url;
+					// last url is probably the important one
+					external_link = url[url.length-1].url;
 					// read text from URL location
-					request = new XMLHttpRequest();
-					console.log("GET " + url);
-					request.overrideMimeType("text/plain");
-					request.open('GET', url, true);
-					request.send(null);
-					request.onerror = error_handler;
-					request.onreadystatechange = function () {
-						if (request.readyState === 4) {
-							if(request.status == 200) {
-								console.log(request.reponseText);
-								if(request.responseText === undefined)
-									return;
-								editor.session.getUndoManager().reset();
-								editor.session.setValue(request.responseText, -1);
-								script_passed_handler();
-							} else {
-								error_handler();
+					url.forEach(e=>{
+						let request = new XMLHttpRequest();
+						console.log("GET " + e.url);
+						request.overrideMimeType("text/plain");
+						request.open('GET', e.url, true);
+						request.send(null);
+						request.onerror = error_handler;
+						request.onreadystatechange = function () {
+							if (request.readyState === 4) {
+								if(request.status == 200) {
+									console.log(request.reponseText);
+									if(request.responseText === undefined)
+										return;
+									e.content = request.responseText;
+									// check if all of them have content
+									total = url.reduce((total, el) => total+("content" in el) ,0);
+									console.log(total+" of "+url.length+" loaded");
+									if(total==url.length){
+										final_script = "";
+										url.forEach(e=>{
+											if("comment" in e){
+												final_script += "##### "+e.comment+" #####\n\n";
+											}
+											final_script += e.content + "\n\n";
+										})
+										editor.session.getUndoManager().reset();
+										editor.session.setValue(final_script, -1);
+										script_passed_handler();
+									}
+								} else {
+									error_handler();
+								}
 							}
 						}
-					}
+					});
 				} else {
 					external_link = null;
 					// decompress LZString
@@ -552,16 +494,28 @@
 				term.fit();
 				var script = getSearchArg("script");
 				var script_direct = getSearchArg("script_direct");
-				var init_script = getSearchArg("init_script");
+				var script_startup = getSearchArg("script_startup");
 				if(script_direct !== undefined && script_direct !== null) {
 					script_passed = true;
 					processScriptArg(script_direct, true);
-				} else if(init_script !== undefined && init_script !== null){
-					script_passed = true;
-					if(script !== undefined && script !== null){
-						combineScripts(init_script, script);
+				} else if(script_startup !== undefined && script_startup !== null) {
+					// both startup script and normal script are passed
+					if(script !== undefined && script !== null) {
+						script_passed = true;
+						// pass an array of objects
+						processScriptArg([
+							{
+								"comment": "startup script",
+								"url": script_startup
+							},
+							{
+								"comment": "main script",
+								"url": script
+							}
+						]);
 					}else{
-						processScriptArg(init_script);
+						script_passed = true;
+						processScriptArg(script_startup);
 					}
 				} else if(script !== undefined && script !== null) {
 					script_passed = true;
